@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>梗枋 & 烏石漁港 動態水質圖示範</title>
+
+    <!-- ① TGOS MAP API-Lite（內政部提供的 AppID / APIKey） -->
+    <script type="text/javascript"
+        src="https://api.tgos.tw/TGOS_API/tgos?ver=2&AppID=x+JLVSx85Lk=&APIKey=in8W74q0ogpcfW/STwicK8D5QwCdddJf05/7nb+OtDh8R99YN3T0LurV4xato3TpL/fOfylvJ9Wv/khZEsXEWxsBmg+GEj4AuokiNXCh14Rei21U5GtJpIkO++Mq3AguFK/ISDEWn4hMzqgrkxNe1Q=="
+        charset="utf-8">
+    </script>
+
+    <!-- ② Chart.js（畫動態折線圖） -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- ③ PapaParse（讀取 CSV 用） -->
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+    <style>
+        body { margin: 0; }
+        #MapDiv {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 1000px;   /* 地圖大小，可自行調整 */
+            height: 650px;   /* 地圖大小，可自行調整 */
+            border: 1px solid #333;
+        }
+    </style>
+
+    <script type="text/javascript">
+        var map;          // TGOS 地圖物件
+        var csvData = null;  // CSV 讀進來的所有資料
+
+        // 個別圖表物件，避免重複開啟時疊圖
+        var gfPhChart = null;
+        var gfDoChart = null;
+        var wsPhChart = null;
+        var wsDoChart = null;
+
+        // --- Step 1：先載入 CSV，再初始化地圖 ---
+        function InitAll() {
+            fetch('water_quality.csv')
+                .then(function (response) { return response.text(); })
+                .then(function (text) {
+                    var parsed = Papa.parse(text, {
+                        header: true,
+                        skipEmptyLines: true
+                    });
+                    csvData = parsed.data;  // 存全域
+                    console.log("CSV 讀取完成，筆數：", csvData.length);
+                    InitMap();              // 有資料後再建地圖
+                })
+                .catch(function (error) {
+                    console.error("讀取 CSV 發生錯誤：", error);
+                    alert("無法載入 water_quality.csv，請確認檔案是否存在且路徑正確。");
+                });
+        }
+
+        // --- Step 2：初始化 TGOS 地圖與 Marker + InfoWindow ---
+        function InitMap() {
+            var mapDiv = document.getElementById("MapDiv");
+
+            var mapOptions = {
+                scaleControl: false,
+                navigationControl: true,
+                navigationControlOptions: {
+                    controlPosition: TGOS.TGControlPosition.TOP_LEFT,
+                    navigationControlStyle: TGOS.TGNavigationControlStyle.SMALL
+                },
+                mapTypeControl: false
+            };
+
+            // 梗枋漁港 TWD97 座標（X, Y）
+            var gengfangPoint = new TGOS.TGPoint(337898.412, 2755463.869);
+
+            // 烏石漁港 TWD97 座標（X, Y）
+            var wushiPoint   = new TGOS.TGPoint(334485.346, 2751416.022);
+
+            // 地圖初始中心取兩港口中間附近（粗略平均）
+            var centerX = (337898.412 + 334485.346) / 2;
+            var centerY = (2755463.869 + 2751416.022) / 2;
+            var centerPoint = new TGOS.TGPoint(centerX, centerY);
+
+            // 建立 TGOS 地圖（使用 TWD97 EPSG3826）
+            map = new TGOS.TGOnlineMap(mapDiv, TGOS.TGCoordSys.EPSG3826, mapOptions);
+            map.setZoom(11);
+            map.setCenter(centerPoint);
+
+            // 標記圖示設定
+            var iconUrl = "https://api.tgos.tw/TGOS_API/images/marker2.png";
+            var markerImg = new TGOS.TGImage(
+                iconUrl,
+                new TGOS.TGSize(38, 33),
+                new TGOS.TGPoint(0, 0),
+                new TGOS.TGPoint(10, 33)
+            );
+
+            // --- 梗枋漁港 Marker + InfoWindow ---
+            var gfMarker = new TGOS.TGMarker(map, gengfangPoint, "梗枋漁港", markerImg);
+
+            var gfHtml =
+                "<b>梗枋漁港水質時序圖</b><br>" +
+                "<small>pH 與 DO（來源：CSV）</small><br><br>" +
+
+                "<div style='width:320px;height:200px;'>" +
+                "<b>pH</b><br>" +
+                "<canvas id='gf_ph_canvas' width='320' height='160'></canvas>" +
+                "</div><br>" +
+
+                "<div style='width:320px;height:200px;'>" +
+                "<b>DO（mg/L）</b><br>" +
+                "<canvas id='gf_do_canvas' width='320' height='160'></canvas>" +
+                "</div>";
+
+            var gfInfoWindow = new TGOS.TGInfoWindow(gfHtml, gengfangPoint, {
+                maxWidth: 360,
+                pixelOffset: new TGOS.TGSize(5, -30),
+                zIndex: 99
+            });
+
+            TGOS.TGEvent.addListener(gfMarker, "click", function () {
+                gfInfoWindow.open(map);
+                setTimeout(drawGengfangChart, 200);
+            });
+
+            // --- 烏石漁港 Marker + InfoWindow ---
+            var wsMarker = new TGOS.TGMarker(map, wushiPoint, "烏石漁港", markerImg);
+
+            var wsHtml =
+                "<b>烏石漁港水質時序圖</b><br>" +
+                "<small>pH 與 DO（來源：CSV）</small><br><br>" +
+
+                "<div style='width:320px;height:200px;'>" +
+                "<b>pH</b><br>" +
+                "<canvas id='ws_ph_canvas' width='320' height='160'></canvas>" +
+                "</div><br>" +
+
+                "<div style='width:320px;height:200px;'>" +
+                "<b>DO（mg/L）</b><br>" +
+                "<canvas id='ws_do_canvas' width='320' height='160'></canvas>" +
+                "</div>";
+
+            var wsInfoWindow = new TGOS.TGInfoWindow(wsHtml, wushiPoint, {
+                maxWidth: 360,
+                pixelOffset: new TGOS.TGSize(5, -30),
+                zIndex: 99
+            });
+
+            TGOS.TGEvent.addListener(wsMarker, "click", function () {
+                wsInfoWindow.open(map);
+                setTimeout(drawWushiChart, 200);
+            });
+        }
+
+        // --- 工具：依據 port 名稱取得該港口的資料並依 year+month 排序 ---
+        function getPortData(portName) {
+            if (!csvData) {
+                alert("CSV 資料尚未載入完成。");
+                return [];
+            }
+            // 過濾同一個漁港
+            var rows = csvData.filter(function (row) {
+                return row.port === portName;
+            });
+            // 依 year、month 排序（字串轉整數）
+            rows.sort(function (a, b) {
+                var ya = parseInt(a.year, 10);
+                var yb = parseInt(b.year, 10);
+                if (ya !== yb) return ya - yb;
+                var ma = parseInt(a.month, 10);
+                var mb = parseInt(b.month, 10);
+                return ma - mb;
+            });
+            return rows;
+        }
+
+        // --- 梗枋漁港：pH + DO 各一張圖（資料來自 CSV） ---
+        function drawGengfangChart() {
+            var phCanvas = document.getElementById('gf_ph_canvas');
+            var doCanvas = document.getElementById('gf_do_canvas');
+            if (!phCanvas || !doCanvas) return;
+
+            var phCtx = phCanvas.getContext('2d');
+            var doCtx = doCanvas.getContext('2d');
+
+            // 先銷毀舊圖
+            if (gfPhChart) gfPhChart.destroy();
+            if (gfDoChart) gfDoChart.destroy();
+
+            var rows = getPortData("梗枋");
+            if (rows.length === 0) {
+                console.warn("CSV 中沒有『梗枋』的資料");
+                return;
+            }
+
+            // 標籤顯示為 "2025/01" 這種格式
+            var labels = rows.map(function (r) {
+                var y = r.year;
+                var m = parseInt(r.month, 10);
+                var mm = (m < 10 ? "0" + m : "" + m);
+                return y + "/" + mm;
+            });
+
+            var phData = rows.map(function (r) { return parseFloat(r.ph); });
+            var doData = rows.map(function (r) { return parseFloat(r.do); });
+
+            // pH 圖
+            gfPhChart = new Chart(phCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'pH（梗枋）',
+                        data: phData,
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 3
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    scales: {
+                        y: { suggestedMin: 7.0, suggestedMax: 8.5 },
+                        x: { title: { display: true, text: '年月' } }
+                    },
+                    plugins: {
+                        legend: { display: true },
+                        tooltip: { enabled: true }
+                    }
+                }
+            });
+
+            // DO 圖
+            gfDoChart = new Chart(doCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'DO（梗枋，mg/L）',
+                        data: doData,
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 3
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    scales: {
+                        y: { suggestedMin: 4.0, suggestedMax: 5.5 },
+                        x: { title: { display: true, text: '年月' } }
+                    },
+                    plugins: {
+                        legend: { display: true },
+                        tooltip: { enabled: true }
+                    }
+                }
+            });
+        }
+
+        // --- 烏石漁港：pH + DO 各一張圖（資料來自 CSV） ---
+        function drawWushiChart() {
+            var phCanvas = document.getElementById('ws_ph_canvas');
+            var doCanvas = document.getElementById('ws_do_canvas');
+            if (!phCanvas || !doCanvas) return;
+
+            var phCtx = phCanvas.getContext('2d');
+            var doCtx = doCanvas.getContext('2d');
+
+            if (wsPhChart) wsPhChart.destroy();
+            if (wsDoChart) wsDoChart.destroy();
+
+            var rows = getPortData("烏石");
+            if (rows.length === 0) {
+                console.warn("CSV 中沒有『烏石』的資料");
+                return;
+            }
+
+            var labels = rows.map(function (r) {
+                var y = r.year;
+                var m = parseInt(r.month, 10);
+                var mm = (m < 10 ? "0" + m : "" + m);
+                return y + "/" + mm;
+            });
+
+            var phData = rows.map(function (r) { return parseFloat(r.ph); });
+            var doData = rows.map(function (r) { return parseFloat(r.do); });
+
+            // pH 圖
+            wsPhChart = new Chart(phCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'pH（烏石）',
+                        data: phData,
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 3
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    scales: {
+                        y: { suggestedMin: 7.0, suggestedMax: 8.5 },
+                        x: { title: { display: true, text: '年月' } }
+                    },
+                    plugins: {
+                        legend: { display: true },
+                        tooltip: { enabled: true }
+                    }
+                }
+            });
+
+            // DO 圖
+            wsDoChart = new Chart(doCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'DO（烏石，mg/L）',
+                        data: doData,
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 3
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    scales: {
+                        y: { suggestedMin: 4.0, suggestedMax: 5.5 },
+                        x: { title: { display: true, text: '年月' } }
+                    },
+                    plugins: {
+                        legend: { display: true },
+                        tooltip: { enabled: true }
+                    }
+                }
+            });
+        }
+    </script>
+</head>
+
+<body onload="InitAll();">
+    <div id="MapDiv"></div>
+</body>
+</html>
